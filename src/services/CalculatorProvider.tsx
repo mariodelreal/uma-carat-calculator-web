@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
+import { matchPath, useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { CalculatorContext } from "./CalculatorContext"
 import { clearAuthToken, getAuthToken } from "./authToken"
@@ -55,6 +56,17 @@ interface CalculatorProviderProps {
 }
 
 export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
+	const location = useLocation()
+	const navigate = useNavigate()
+	const navigateToPlan = useCallback(
+		(plan: Plan | undefined, replace = false): void => {
+			if (!plan?.public_id) return
+			const path = `/app/${encodeURIComponent(plan.public_id)}`
+			if (location.pathname !== path) navigate(path, { replace })
+		},
+		[location.pathname, navigate]
+	)
+
 	/**
 	 * TYPESCRIPT CONCEPT: useState Generic Parameter
 	 *
@@ -458,7 +470,11 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	const switchPlan = useCallback(
 		(planId: number): Promise<boolean> =>
 			runPlanAction(async () => {
-				if (planId === activePlanId) return true
+				if (planId === activePlanId) {
+					// covers an edge case where the user clicks the active plan while still under the /app base url - updates the url
+					navigateToPlan(plans.find((plan) => plan.id === planId))
+					return true
+				}
 				if (!(await flushPendingSave())) {
 					toast.error("Your changes didn't save, so we stayed on this plan.")
 					return false
@@ -480,10 +496,32 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 					data.user_stats_data,
 					data.user_planned_purchase_data
 				)
+				navigateToPlan(plans.find((plan) => plan.id === planId) ?? data.plan)
 				return true
 			}),
-		[runPlanAction, activePlanId, flushPendingSave, applyPlan]
+		[runPlanAction, activePlanId, flushPendingSave, applyPlan, navigateToPlan, plans]
 	)
+
+	const lastResolvedPlanPathRef = useRef<string | null>(null)
+	useEffect(() => {
+		if (isLoading || lastResolvedPlanPathRef.current === location.pathname) return
+		lastResolvedPlanPathRef.current = location.pathname
+		const publicId = matchPath(
+			{ path: "/app/:public_id", end: true },
+			location.pathname
+		)?.params.public_id
+		if (!publicId) return
+
+		const requestedPlan = plans.find((plan) => plan.public_id === publicId)
+		if (requestedPlan) {
+			if (requestedPlan.id !== activePlanId) void switchPlan(requestedPlan.id)
+			return
+		}
+
+		const activePlan = plans.find((plan) => plan.id === activePlanId)
+		if (activePlan?.public_id) navigateToPlan(activePlan, true)
+		else navigate("/app", { replace: true })
+	}, [isLoading, location.pathname, plans, activePlanId, switchPlan, navigateToPlan, navigate])
 
 	const createPlan = useCallback(
 		(name: string, copyFromId?: number): Promise<boolean> =>
@@ -519,10 +557,11 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 					data.user_stats_data,
 					data.user_planned_purchase_data
 				)
+				navigateToPlan(data.plan)
 				toast.success(copyFromId === undefined ? "Plan created" : "Plan copied")
 				return true
 			}),
-		[runPlanAction, flushPendingSave, applyPlan]
+		[runPlanAction, flushPendingSave, applyPlan, navigateToPlan]
 	)
 
 	const renamePlan = useCallback(
@@ -568,10 +607,13 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 				const { active_plan_id: landedOn } = (await response.json()) as {
 					active_plan_id: number
 				}
-				setPlans((prev) => prev.filter((plan) => plan.id !== planId))
+				const remainingPlans = plans.filter((plan) => plan.id !== planId)
+				setPlans(remainingPlans)
 				if (deletingOpenPlan) {
 					// The server promoted another plan. Its rows are not on screen yet.
-					const fetched = await planFetch(landedOn)
+					const nextPlan = remainingPlans.find((plan) => plan.id === landedOn) ?? remainingPlans[0]
+					const nextPlanId = nextPlan?.id ?? landedOn
+					const fetched = await planFetch(nextPlanId)
 					if (!fetched.ok) {
 						// The delete is done and cannot be undone from here, and the
 						// rows on screen belong to nothing. A reload is the honest fix.
@@ -580,16 +622,17 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 					}
 					const data = (await fetched.json()) as PlanWithRows
 					applyPlan(
-						landedOn,
+						nextPlanId,
 						data.user_planned_banner_data,
 						data.user_stats_data,
 						data.user_planned_purchase_data
 					)
+					navigateToPlan(nextPlan ?? data.plan)
 				}
 				toast.success("Plan deleted")
 				return true
 			}),
-		[runPlanAction, activePlanId, cancelTimer, flushPendingSave, applyPlan]
+		[runPlanAction, activePlanId, cancelTimer, flushPendingSave, applyPlan, plans, navigateToPlan]
 	)
 
 	const setSeparateIncome = useCallback(

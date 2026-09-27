@@ -25,6 +25,8 @@ import type { UserPlannedBanner, UserStats } from "./user"
 
 export interface Plan {
 	id: number
+	/** Opaque URL-safe identifier returned by calculator-data. */
+	public_id?: string
 	name: string
 	is_active: boolean
 	/**

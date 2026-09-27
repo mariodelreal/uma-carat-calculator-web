@@ -18,6 +18,7 @@
 
 import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CalculatorProvider } from '../services/CalculatorProvider'
 import { useCalculatorData } from '../services/CalculatorContext'
@@ -71,8 +72,8 @@ const mockedSetSeparateIncome = vi.mocked(planSetSeparateIncome)
 const json = (body: unknown, status = 200): Response =>
 	({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response
 
-const PLAN_A: Plan = { id: 1, name: 'Main plan', is_active: true, updated_at: '2026-09-17T00:00:00Z' }
-const PLAN_B: Plan = { id: 2, name: 'What if', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
+const PLAN_A: Plan = { id: 1, public_id: 'main-plan', name: 'Main plan', is_active: true, updated_at: '2026-09-17T00:00:00Z' }
+const PLAN_B: Plan = { id: 2, public_id: 'what-if', name: 'What if', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
 
 /** A saved row. Only what toBannerPayload reads: an id, a target, two counts. */
 const row = (id: number, bannerId: number, pulls: number, plan: number): UserPlannedBanner =>
@@ -124,10 +125,13 @@ const calculatorData = (): CalculatorData =>
 // during render (a component may not write to anything outside itself while
 // rendering); act() flushes effects, so it is current by the time a test reads.
 const latest: { current: CalculatorContextType | null } = { current: null }
+const currentPath: { current: string } = { current: '' }
 const Probe = () => {
 	const value = useCalculatorData()
+	const { pathname } = useLocation()
 	useEffect(() => {
 		latest.current = value
+		currentPath.current = pathname
 	})
 	return null
 }
@@ -136,11 +140,13 @@ const ctx = (): CalculatorContextType => {
 	return latest.current
 }
 
-const renderLoaded = async (): Promise<void> => {
+const renderLoaded = async (initialPath = '/app'): Promise<void> => {
 	render(
-		<CalculatorProvider>
-			<Probe />
-		</CalculatorProvider>
+		<MemoryRouter initialEntries={[initialPath]}>
+			<CalculatorProvider>
+				<Probe />
+			</CalculatorProvider>
+		</MemoryRouter>
 	)
 	await waitFor(() => expect(latest.current?.isLoading).toBe(false))
 }
@@ -157,6 +163,7 @@ const editOpenPlan = async (pulls: number): Promise<void> => {
 
 beforeEach(() => {
 	latest.current = null
+	currentPath.current = ''
 	localStorage.clear()
 	sessionStorage.clear()
 	vi.clearAllMocks()
@@ -218,6 +225,39 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
 		expect(ctx().plans.find((plan) => plan.id === PLAN_B.id)?.is_active).toBe(true)
 		expect(ctx().plans.find((plan) => plan.id === PLAN_A.id)?.is_active).toBe(false)
+		expect(currentPath.current).toBe('/app/what-if')
+	})
+
+	it('opens the plan named by a direct public-id URL', async () => {
+		await renderLoaded('/app/what-if')
+
+		await waitFor(() => expect(ctx().activePlanId).toBe(PLAN_B.id))
+
+		expect(mockedActivate).toHaveBeenCalledWith(PLAN_B.id)
+		expect(mockedPlanFetch).toHaveBeenCalledWith(PLAN_B.id)
+		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
+	})
+
+	it('does not switch back when plans are changed repeatedly', async () => {
+		await renderLoaded()
+
+		await act(async () => {
+			await ctx().switchPlan(PLAN_B.id)
+		})
+		await act(async () => {
+			await ctx().switchPlan(PLAN_A.id)
+		})
+		await act(async () => {
+			await ctx().switchPlan(PLAN_B.id)
+		})
+
+		expect(ctx().activePlanId).toBe(PLAN_B.id)
+		expect(currentPath.current).toBe('/app/what-if')
+		expect(mockedPlanFetch.mock.calls.map(([planId]) => planId)).toEqual([
+			PLAN_B.id,
+			PLAN_A.id,
+			PLAN_B.id,
+		])
 	})
 
 	it('does not arm a save for rows that just arrived from the server', async () => {
@@ -282,7 +322,7 @@ describe('CalculatorProvider plans', () => {
 	})
 
 	it('flushes before creating a copy, then opens the copy', async () => {
-		const copy: Plan = { id: 3, name: 'Main plan copy', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
+		const copy: Plan = { id: 3, public_id: 'main-plan-copy', name: 'Main plan copy', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
 		const copiedRows = [row(30, 100, 999, 3)]
 		mockedCreate.mockResolvedValue(json({ plan: copy, user_planned_banner_data: copiedRows }, 201))
 		mockedActivate.mockResolvedValue(json({ ...copy, is_active: true }))
@@ -301,6 +341,7 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().plans.map((plan) => plan.id)).toEqual([1, 2, 3])
 		expect(ctx().activePlanId).toBe(3)
 		expect(ctx().userPlannedBannerData).toEqual(copiedRows)
+		expect(currentPath.current).toBe('/app/main-plan-copy')
 	})
 
 	it('drops, rather than fires, a pending save for the plan being deleted', async () => {
@@ -318,6 +359,7 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().plans.map((plan) => plan.id)).toEqual([PLAN_B.id])
 		expect(ctx().activePlanId).toBe(PLAN_B.id)
 		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
+		expect(currentPath.current).toBe('/app/what-if')
 	})
 
 	it('keeps the open plan and its pending edit when deleting a different plan', async () => {

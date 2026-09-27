@@ -108,6 +108,7 @@ export const ApplicationViews = () => {
 				}
 			>
 				<Route index element={<CaratCalculator />} />
+				<Route path=":public_id" element={<CaratCalculator />} />
 				<Route path="timeline" element={<Timeline />}/>
 				<Route path="selectors" element={<Selectors />}/>
 			</Route>

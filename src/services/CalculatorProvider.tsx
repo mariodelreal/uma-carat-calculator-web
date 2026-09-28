@@ -46,6 +46,7 @@ import {
 	planCreate,
 	planDelete,
 	planFetch,
+	planFetchPublic,
 	planSetSeparateIncome,
 	planRename
 } from "./planFetchCalls"
@@ -97,6 +98,7 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	// plan's rows.
 	const [plans, setPlans] = useState<Plan[]>([])
 	const [activePlanId, setActivePlanId] = useState<number | null>(null)
+	const isReadOnly = activePlanId !== null && !plans.some((plan) => plan.id === activePlanId)
 	const [isPlanBusy, setIsPlanBusy] = useState(false)
 	// Deliberately NOT persisted — not to localStorage, not to sessionStorage,
 	// and never PATCHed. Staging is scratch space, and a reload clearing it is
@@ -149,9 +151,8 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	const lastSaveOkRef = useRef(true)
 
 	const performSave = useCallback(async (): Promise<void> => {
-		// Guests never PATCH — their plan is in-memory only. The auto-save
-		// timer is already gated, but saveNow could still land here.
-		if (!getAuthToken()) return
+		// Guests and visitors to a shared plan never PATCH.
+		if (!getAuthToken() || isReadOnly) return
 		try {
 			const response = await userCalculatorDataPatch(
 					// The plan these rows were loaded from. It comes from the same
@@ -174,7 +175,7 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 			toast.error("Save failed. Check your connection.")
 		}
 	}, [activePlanId, userStatsData, prepareBannerData, preparePurchaseData,
-		prepareStepUpSelectionData])
+		prepareStepUpSelectionData, isReadOnly])
 
 	const { timerIsGoing, startTimer, saveNow, cancelTimer } = useAutoSave({
 		saveFn: performSave,
@@ -398,6 +399,7 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 			suppressAutoSaveRef.current = false
 			return
 		}
+		if (isReadOnly) return
 		// Guests have nothing to save to the server. Never arming the timer
 		// also suppresses the pending-save icon and the beforeunload warning.
 		if (!getAuthToken()) return
@@ -406,7 +408,7 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 		// applyPlan and clear suppressAutoSaveRef. Every applyPlan changes the id;
 		// without it, a flag left set would swallow the user's next real edit.
 	}, [startTimer, userStatsData, userPlannedBannerData, userPlannedPurchaseData,
-		userStepUpSelectionData, activePlanId])
+		userStepUpSelectionData, activePlanId, isReadOnly])
 
 	// ── Plans ────────────────────────────────────────────────────────────────
 	//
@@ -417,10 +419,11 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 
 	/** Flush a pending auto-save. False means it failed and nothing should move. */
 	const flushPendingSave = useCallback(async (): Promise<boolean> => {
+		if (isReadOnly) return true
 		if (!timerIsGoing) return true
 		await saveNow()
 		return lastSaveOkRef.current
-	}, [timerIsGoing, saveNow])
+	}, [isReadOnly, timerIsGoing, saveNow])
 
 	/**
 	 * Put another plan on screen: its id, its rows, its stats and its purchases
@@ -505,12 +508,19 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	const lastResolvedPlanPathRef = useRef<string | null>(null)
 	useEffect(() => {
 		if (isLoading || lastResolvedPlanPathRef.current === location.pathname) return
-		lastResolvedPlanPathRef.current = location.pathname
 		const publicId = matchPath(
 			{ path: "/app/:public_id", end: true },
 			location.pathname
 		)?.params.public_id
-		if (!publicId) return
+		if (!publicId) {
+			lastResolvedPlanPathRef.current = location.pathname
+			if (isReadOnly) {
+				const ownedPlan = plans.find((plan) => plan.is_active) ?? plans[0]
+				if (ownedPlan) void switchPlan(ownedPlan.id)
+			}
+			return
+		}
+		lastResolvedPlanPathRef.current = location.pathname
 
 		const requestedPlan = plans.find((plan) => plan.public_id === publicId)
 		if (requestedPlan) {
@@ -518,10 +528,47 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 			return
 		}
 
-		const activePlan = plans.find((plan) => plan.id === activePlanId)
-		if (activePlan?.public_id) navigateToPlan(activePlan, true)
-		else navigate("/app", { replace: true })
-	}, [isLoading, location.pathname, plans, activePlanId, switchPlan, navigateToPlan, navigate])
+		let cancelled = false
+		void (async () => {
+			try {
+				const fetched = await planFetchPublic(publicId)
+				if (cancelled) return
+				if (!fetched.ok) throw new Error("Shared plan not found")
+				const data = (await fetched.json()) as PlanWithRows
+				if (cancelled) return
+				const ownedPlan = plans.find((plan) => plan.id === data.plan.id)
+				if (ownedPlan) {
+					if (ownedPlan.id !== activePlanId) void switchPlan(ownedPlan.id)
+					return
+				}
+				if (!(await flushPendingSave())) {
+					if (cancelled) return
+					toast.error("Your changes didn't save, so we stayed on this plan.")
+					const activePlan = plans.find((plan) => plan.id === activePlanId)
+					if (activePlan) navigateToPlan(activePlan, true)
+					else navigate("/app", { replace: true })
+					return
+				}
+				if (cancelled) return
+				applyPlan(
+					data.plan.id,
+					data.user_planned_banner_data,
+					data.user_stats_data,
+					data.user_planned_purchase_data
+				)
+			} catch {
+				if (cancelled) return
+				toast.error("Couldn't open this shared plan.")
+				const activePlan = plans.find((plan) => plan.id === activePlanId)
+				if (activePlan) navigateToPlan(activePlan, true)
+				else navigate("/app", { replace: true })
+			}
+		})()
+		return () => {
+			cancelled = true
+		}
+	}, [isLoading, location.pathname, plans, activePlanId, isReadOnly, switchPlan,
+		flushPendingSave, applyPlan, navigateToPlan, navigate])
 
 	const createPlan = useCallback(
 		(name: string, copyFromId?: number): Promise<boolean> =>
@@ -680,6 +727,16 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 		[runPlanAction, activePlanId, flushPendingSave, applyPlan]
 	)
 
+	const ignoreStateUpdate = <T,>(_value: React.SetStateAction<T>): void => {}
+	const setBannerData = isReadOnly ? ignoreStateUpdate : setUserPlannedBannerData
+	const setStagedBannerData = isReadOnly ? ignoreStateUpdate : setStagedBanners
+	const setPurchaseData = isReadOnly ? ignoreStateUpdate : setUserPlannedPurchaseData
+	const setStepUpSelectionData = isReadOnly ? ignoreStateUpdate : setUserStepUpSelectionData
+	const setStatsData = isReadOnly ? ignoreStateUpdate : setUserStatsData
+	const saveIfWritable = useCallback(async (): Promise<void> => {
+		if (!isReadOnly) await saveNow()
+	}, [isReadOnly, saveNow])
+
 	const value = {
 		userStatsData,
 		clubRankData,
@@ -706,18 +763,19 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 		organizedTimelineData,
 		plans,
 		activePlanId,
+		isReadOnly,
 		isPlanBusy,
 		switchPlan,
 		createPlan,
 		renamePlan,
 		deletePlan,
 		setSeparateIncome,
-		saveNow,
-		setUserPlannedBannerData,
-		setStagedBanners,
-		setUserPlannedPurchaseData,
-		setUserStepUpSelectionData,
-		setUserStatsData
+		saveNow: saveIfWritable,
+		setUserPlannedBannerData: setBannerData,
+		setStagedBanners: setStagedBannerData,
+		setUserPlannedPurchaseData: setPurchaseData,
+		setUserStepUpSelectionData: setStepUpSelectionData,
+		setUserStatsData: setStatsData
 	}
 
 	// Children render straight away, loading or not.
@@ -733,6 +791,14 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	// letting them mount early would mean auditing all three for empty data.
 	return (
 		<CalculatorContext.Provider value={value}>
+			{isReadOnly && (
+				<div
+					role="status"
+					className="border-b border-amber-400/20 bg-amber-400/10 px-4 py-2 text-center text-sm text-amber-200"
+				>
+					Viewing a shared plan in read-only mode.
+				</div>
+			)}
 			{children}
 		</CalculatorContext.Provider>
 	)

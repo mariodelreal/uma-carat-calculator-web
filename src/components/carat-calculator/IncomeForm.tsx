@@ -221,6 +221,7 @@ export const IncomeForm = () => {
 		leagueOfHeroesRankData,
 		incomeLedger,
 		calculationConstants,
+		isReadOnly,
 		setUserStatsData,
 	} = useCalculatorData()
 
@@ -322,6 +323,7 @@ export const IncomeForm = () => {
 				transition={{ duration: 0.2, ease: "easeInOut" }}
 				style={{ overflow: "hidden" }}
 			>
+				<fieldset disabled={isReadOnly} className="m-0 min-w-0 border-0 p-0">
 				<div className="bg-gray-800">
 					{/* ── Top row: Income Sources + Current Resources ── */}
 					<div className="grid grid-cols-1 @income-wide:grid-cols-[2fr_1fr]">
@@ -356,6 +358,7 @@ export const IncomeForm = () => {
 											<Select
 												className="order-last w-full min-w-0 @income-wide:order-none @income-wide:col-span-1 @income-wide:w-auto"
 												styles={selectStyles}
+												isDisabled={isReadOnly}
 												menuPortalTarget={document.body}
 												menuPosition="fixed"
 												// Controlled, not defaultValue: userStatsData can be replaced
@@ -399,6 +402,7 @@ export const IncomeForm = () => {
 											<Select
 												className="order-last w-full min-w-0 @income-wide:order-none @income-wide:col-span-1 @income-wide:w-auto"
 												styles={selectStyles}
+												isDisabled={isReadOnly}
 												menuPortalTarget={document.body}
 												menuPosition="fixed"
 												value={
@@ -438,6 +442,7 @@ export const IncomeForm = () => {
 											<Select
 												className="order-last w-full min-w-0 @income-wide:order-none @income-wide:col-span-1 @income-wide:w-auto"
 												styles={selectStyles}
+												isDisabled={isReadOnly}
 												menuPortalTarget={document.body}
 												menuPosition="fixed"
 												value={
@@ -477,6 +482,7 @@ export const IncomeForm = () => {
 											<Select
 												className="order-last w-full min-w-0 @income-wide:order-none @income-wide:col-span-1 @income-wide:w-auto"
 												styles={selectStyles}
+												isDisabled={isReadOnly}
 												menuPortalTarget={document.body}
 												menuPosition="fixed"
 												value={
@@ -698,6 +704,7 @@ export const IncomeForm = () => {
 						</div>
 					</div>
 				</div>
+					</fieldset>
 			</motion.div>
 		</div>
 	)

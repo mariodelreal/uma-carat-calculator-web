@@ -18,7 +18,7 @@
 
 import { useEffect } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CalculatorProvider } from '../services/CalculatorProvider'
 import { useCalculatorData } from '../services/CalculatorContext'
@@ -31,9 +31,10 @@ import {
 	planCreate,
 	planDelete,
 	planFetch,
+	planFetchPublic,
 	planSetSeparateIncome,
 } from '../services/planFetchCalls'
-import { setAuthToken } from '../services/authToken'
+import { clearAuthToken, setAuthToken } from '../services/authToken'
 import type {
 	BannerUma,
 	CalculatorContextType,
@@ -56,6 +57,7 @@ vi.mock('../services/planFetchCalls', () => ({
 	planCreate: vi.fn(),
 	planDelete: vi.fn(),
 	planFetch: vi.fn(),
+	planFetchPublic: vi.fn(),
 	planRename: vi.fn(),
 	planSetSeparateIncome: vi.fn(),
 }))
@@ -67,6 +69,7 @@ const mockedActivate = vi.mocked(planActivate)
 const mockedCreate = vi.mocked(planCreate)
 const mockedDelete = vi.mocked(planDelete)
 const mockedPlanFetch = vi.mocked(planFetch)
+const mockedPublicPlanFetch = vi.mocked(planFetchPublic)
 const mockedSetSeparateIncome = vi.mocked(planSetSeparateIncome)
 
 const json = (body: unknown, status = 200): Response =>
@@ -126,12 +129,15 @@ const calculatorData = (): CalculatorData =>
 // rendering); act() flushes effects, so it is current by the time a test reads.
 const latest: { current: CalculatorContextType | null } = { current: null }
 const currentPath: { current: string } = { current: '' }
+const currentNavigate: { current: ReturnType<typeof useNavigate> | null } = { current: null }
 const Probe = () => {
 	const value = useCalculatorData()
 	const { pathname } = useLocation()
+	const navigate = useNavigate()
 	useEffect(() => {
 		latest.current = value
 		currentPath.current = pathname
+		currentNavigate.current = navigate
 	})
 	return null
 }
@@ -140,8 +146,8 @@ const ctx = (): CalculatorContextType => {
 	return latest.current
 }
 
-const renderLoaded = async (initialPath = '/app'): Promise<void> => {
-	render(
+const renderLoaded = async (initialPath = '/app') => {
+	const view = render(
 		<MemoryRouter initialEntries={[initialPath]}>
 			<CalculatorProvider>
 				<Probe />
@@ -149,6 +155,7 @@ const renderLoaded = async (initialPath = '/app'): Promise<void> => {
 		</MemoryRouter>
 	)
 	await waitFor(() => expect(latest.current?.isLoading).toBe(false))
+	return view
 }
 
 /** Change plan A's one row, the way BannerRow's pull field does. Arms the timer. */
@@ -164,6 +171,7 @@ const editOpenPlan = async (pulls: number): Promise<void> => {
 beforeEach(() => {
 	latest.current = null
 	currentPath.current = ''
+	currentNavigate.current = null
 	localStorage.clear()
 	sessionStorage.clear()
 	vi.clearAllMocks()
@@ -177,6 +185,13 @@ beforeEach(() => {
 			user_stats_data: STATS_B,
 			user_planned_banner_data: ROWS_B,
 			user_planned_purchase_data: PURCHASES_B,
+		})
+	)
+	mockedPublicPlanFetch.mockResolvedValue(
+		json({
+			plan: { ...PLAN_B, id: 3, public_id: 'shared-plan', name: 'Shared plan' },
+			user_stats_data: STATS_B,
+			user_planned_banner_data: [row(30, 300, 85, 3)],
 		})
 	)
 })
@@ -236,6 +251,108 @@ describe('CalculatorProvider plans', () => {
 		expect(mockedActivate).toHaveBeenCalledWith(PLAN_B.id)
 		expect(mockedPlanFetch).toHaveBeenCalledWith(PLAN_B.id)
 		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
+	})
+
+	it('opens another users public plan read-only without activating or saving it', async () => {
+		await renderLoaded('/app/shared-plan')
+
+		await waitFor(() => expect(ctx().activePlanId).toBe(3))
+
+		expect(mockedPublicPlanFetch).toHaveBeenCalledWith('shared-plan')
+		expect(ctx().isReadOnly).toBe(true)
+		expect(ctx().userPlannedBannerData[0].number_of_pulls).toBe(85)
+		expect(ctx().userStatsData?.current_carat).toBe(STATS_B.current_carat)
+		expect(ctx().userPlannedPurchaseData).toEqual([])
+		expect(mockedActivate).not.toHaveBeenCalled()
+
+		await act(async () => {
+			ctx().setUserPlannedBannerData((prev) =>
+				prev.map((banner) => ({ ...banner, number_of_pulls: 999 }))
+			)
+			await ctx().saveNow()
+		})
+
+		expect(ctx().userPlannedBannerData[0].number_of_pulls).toBe(85)
+		expect(mockedPatch).not.toHaveBeenCalled()
+	})
+
+	it.each(['/app/timeline', '/app/selectors'])(
+		'does not treat the %s route as a public plan ID',
+		async (path) => {
+			await renderLoaded(path)
+
+			expect(mockedPublicPlanFetch).not.toHaveBeenCalled()
+		}
+	)
+
+	it('opens the first owned plan at /app and updates the URL after loading it', async () => {
+		const data = calculatorData()
+		data.active_plan_id = PLAN_B.id
+		data.user_planned_banner_data = ROWS_B
+		mockedInitialFetch.mockResolvedValue(json(data))
+		mockedPlanFetch.mockResolvedValue(json({
+			plan: PLAN_A,
+			user_stats_data: { current_carat: 123 },
+			user_planned_banner_data: ROWS_A,
+			user_planned_purchase_data: [],
+		}))
+
+		await renderLoaded('/app')
+
+		await waitFor(() => {
+			expect(ctx().activePlanId).toBe(PLAN_A.id)
+			expect(currentPath.current).toBe('/app/main-plan')
+		})
+		expect(mockedActivate).toHaveBeenCalledWith(PLAN_A.id)
+		expect(mockedPlanFetch).toHaveBeenCalledWith(PLAN_A.id)
+		expect(ctx().userPlannedBannerData).toEqual(ROWS_A)
+	})
+
+	it('leaves a guest local plan unchanged at /app', async () => {
+		clearAuthToken()
+		const data = calculatorData()
+		data.user_plans = []
+		data.active_plan_id = null
+		data.user_planned_banner_data = ROWS_B
+		mockedInitialFetch.mockResolvedValue(json(data))
+
+		await renderLoaded('/app')
+
+		expect(ctx().activePlanId).toBeNull()
+		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
+		expect(currentPath.current).toBe('/app')
+		expect(mockedActivate).not.toHaveBeenCalled()
+		expect(mockedPlanFetch).not.toHaveBeenCalled()
+	})
+
+	it('restores a guest local plan after viewing a shared plan', async () => {
+		clearAuthToken()
+		const data = calculatorData()
+		data.user_plans = []
+		data.active_plan_id = null
+		data.user_planned_banner_data = ROWS_A
+		mockedInitialFetch.mockResolvedValue(json(data))
+
+		await renderLoaded('/app')
+		const localStats = ctx().userStatsData
+		const localRows = ctx().userPlannedBannerData
+
+		await act(async () => {
+			currentNavigate.current?.('/app/shared-plan')
+		})
+		await waitFor(() => expect(ctx().isReadOnly).toBe(true))
+		expect(ctx().userPlannedBannerData[0].number_of_pulls).toBe(85)
+
+		await act(async () => {
+			currentNavigate.current?.('/app')
+		})
+		await waitFor(() => {
+			expect(currentPath.current).toBe('/app')
+			expect(ctx().isReadOnly).toBe(false)
+		})
+		expect(ctx().activePlanId).toBeNull()
+		expect(ctx().userStatsData).toBe(localStats)
+		expect(ctx().userPlannedBannerData).toBe(localRows)
 	})
 
 	it('does not switch back when plans are changed repeatedly', async () => {

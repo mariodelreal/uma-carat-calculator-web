@@ -160,6 +160,8 @@ export interface CalculatorContextType {
 	 */
 	plans: Plan[]
 	activePlanId: number | null
+	/** True when the open plan belongs to another account and is view-only. */
+	isReadOnly: boolean
 	/** True while a switch, create or delete is in flight. Disables the switcher. */
 	isPlanBusy: boolean
 	/**

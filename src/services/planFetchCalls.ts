@@ -27,6 +27,13 @@ export function planFetch(planId: number): Promise<Response> {
 	})
 }
 
+/** A read-only plan view addressed by its public share identifier. */
+export function planFetchPublic(publicId: string): Promise<Response> {
+	return fetch(`${API_URL}/plans/public/${encodeURIComponent(publicId)}`, {
+		method: "GET"
+	})
+}
+
 /**
  * A new plan, blank or copied from another of the caller's plans. The server
  * creates it INACTIVE; switching to it is a separate planActivate call, made

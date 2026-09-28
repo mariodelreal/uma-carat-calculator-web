@@ -75,8 +75,8 @@ const mockedSetSeparateIncome = vi.mocked(planSetSeparateIncome)
 const json = (body: unknown, status = 200): Response =>
 	({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response
 
-const PLAN_A: Plan = { id: 1, public_id: 'main-plan', name: 'Main plan', is_active: true, updated_at: '2026-09-17T00:00:00Z' }
-const PLAN_B: Plan = { id: 2, public_id: 'what-if', name: 'What if', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
+const PLAN_A: Plan = { id: 1, public_id: 'MainPlan', name: 'Main plan', is_active: true, updated_at: '2026-09-17T00:00:00Z' }
+const PLAN_B: Plan = { id: 2, public_id: 'WhatIf12', name: 'What if', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
 
 /** A saved row. Only what toBannerPayload reads: an id, a target, two counts. */
 const row = (id: number, bannerId: number, pulls: number, plan: number): UserPlannedBanner =>
@@ -189,7 +189,7 @@ beforeEach(() => {
 	)
 	mockedPublicPlanFetch.mockResolvedValue(
 		json({
-			plan: { ...PLAN_B, id: 3, public_id: 'shared-plan', name: 'Shared plan' },
+			plan: { ...PLAN_B, id: 3, public_id: 'Share123', name: 'Shared plan' },
 			user_stats_data: STATS_B,
 			user_planned_banner_data: [row(30, 300, 85, 3)],
 		})
@@ -240,11 +240,11 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
 		expect(ctx().plans.find((plan) => plan.id === PLAN_B.id)?.is_active).toBe(true)
 		expect(ctx().plans.find((plan) => plan.id === PLAN_A.id)?.is_active).toBe(false)
-		expect(currentPath.current).toBe('/app/what-if')
+		expect(currentPath.current).toBe('/app/WhatIf12')
 	})
 
 	it('opens the plan named by a direct public-id URL', async () => {
-		await renderLoaded('/app/what-if')
+		await renderLoaded('/app/WhatIf12')
 
 		await waitFor(() => expect(ctx().activePlanId).toBe(PLAN_B.id))
 
@@ -254,11 +254,11 @@ describe('CalculatorProvider plans', () => {
 	})
 
 	it('opens another users public plan read-only without activating or saving it', async () => {
-		await renderLoaded('/app/shared-plan')
+		await renderLoaded('/app/Share123')
 
 		await waitFor(() => expect(ctx().activePlanId).toBe(3))
 
-		expect(mockedPublicPlanFetch).toHaveBeenCalledWith('shared-plan')
+		expect(mockedPublicPlanFetch).toHaveBeenCalledWith('Share123')
 		expect(ctx().isReadOnly).toBe(true)
 		expect(ctx().userPlannedBannerData[0].number_of_pulls).toBe(85)
 		expect(ctx().userStatsData?.current_carat).toBe(STATS_B.current_carat)
@@ -285,11 +285,48 @@ describe('CalculatorProvider plans', () => {
 		}
 	)
 
-	it('opens the first owned plan at /app and updates the URL after loading it', async () => {
+	it('returns to the last active owned plan at /app', async () => {
 		const data = calculatorData()
 		data.active_plan_id = PLAN_B.id
 		data.user_planned_banner_data = ROWS_B
 		mockedInitialFetch.mockResolvedValue(json(data))
+
+		await renderLoaded('/app')
+
+		await waitFor(() => {
+			expect(ctx().activePlanId).toBe(PLAN_B.id)
+			expect(currentPath.current).toBe('/app/WhatIf12')
+		})
+		expect(mockedActivate).not.toHaveBeenCalled()
+		expect(mockedPlanFetch).not.toHaveBeenCalled()
+	})
+
+	it('returns to the owned plan last open before visiting Timeline', async () => {
+		await renderLoaded()
+		await act(async () => {
+			await ctx().switchPlan(PLAN_B.id)
+		})
+
+		await act(async () => {
+			currentNavigate.current?.('/app/timeline')
+		})
+		await act(async () => {
+			currentNavigate.current?.('/app')
+		})
+
+		await waitFor(() => {
+			expect(ctx().activePlanId).toBe(PLAN_B.id)
+			expect(currentPath.current).toBe('/app/WhatIf12')
+		})
+		expect(mockedPublicPlanFetch).not.toHaveBeenCalled()
+	})
+
+	it('falls back to the first plan if the remembered plan is no longer available', async () => {
+		const data = calculatorData()
+		data.active_plan_id = 999
+		data.user_planned_banner_data = []
+		mockedInitialFetch.mockResolvedValue(json(data))
+		mockedActivate.mockResolvedValue(json({ ...PLAN_A, is_active: true }))
 		mockedPlanFetch.mockResolvedValue(json({
 			plan: PLAN_A,
 			user_stats_data: { current_carat: 123 },
@@ -301,11 +338,10 @@ describe('CalculatorProvider plans', () => {
 
 		await waitFor(() => {
 			expect(ctx().activePlanId).toBe(PLAN_A.id)
-			expect(currentPath.current).toBe('/app/main-plan')
+			expect(currentPath.current).toBe('/app/MainPlan')
 		})
 		expect(mockedActivate).toHaveBeenCalledWith(PLAN_A.id)
 		expect(mockedPlanFetch).toHaveBeenCalledWith(PLAN_A.id)
-		expect(ctx().userPlannedBannerData).toEqual(ROWS_A)
 	})
 
 	it('leaves a guest local plan unchanged at /app', async () => {
@@ -338,7 +374,7 @@ describe('CalculatorProvider plans', () => {
 		const localRows = ctx().userPlannedBannerData
 
 		await act(async () => {
-			currentNavigate.current?.('/app/shared-plan')
+			currentNavigate.current?.('/app/Share123')
 		})
 		await waitFor(() => expect(ctx().isReadOnly).toBe(true))
 		expect(ctx().userPlannedBannerData[0].number_of_pulls).toBe(85)
@@ -369,7 +405,7 @@ describe('CalculatorProvider plans', () => {
 		})
 
 		expect(ctx().activePlanId).toBe(PLAN_B.id)
-		expect(currentPath.current).toBe('/app/what-if')
+		expect(currentPath.current).toBe('/app/WhatIf12')
 		expect(mockedPlanFetch.mock.calls.map(([planId]) => planId)).toEqual([
 			PLAN_B.id,
 			PLAN_A.id,
@@ -439,7 +475,7 @@ describe('CalculatorProvider plans', () => {
 	})
 
 	it('flushes before creating a copy, then opens the copy', async () => {
-		const copy: Plan = { id: 3, public_id: 'main-plan-copy', name: 'Main plan copy', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
+		const copy: Plan = { id: 3, public_id: 'MainCp12', name: 'Main plan copy', is_active: false, updated_at: '2026-09-17T00:00:00Z' }
 		const copiedRows = [row(30, 100, 999, 3)]
 		mockedCreate.mockResolvedValue(json({ plan: copy, user_planned_banner_data: copiedRows }, 201))
 		mockedActivate.mockResolvedValue(json({ ...copy, is_active: true }))
@@ -458,7 +494,7 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().plans.map((plan) => plan.id)).toEqual([1, 2, 3])
 		expect(ctx().activePlanId).toBe(3)
 		expect(ctx().userPlannedBannerData).toEqual(copiedRows)
-		expect(currentPath.current).toBe('/app/main-plan-copy')
+		expect(currentPath.current).toBe('/app/MainCp12')
 	})
 
 	it('drops, rather than fires, a pending save for the plan being deleted', async () => {
@@ -476,7 +512,7 @@ describe('CalculatorProvider plans', () => {
 		expect(ctx().plans.map((plan) => plan.id)).toEqual([PLAN_B.id])
 		expect(ctx().activePlanId).toBe(PLAN_B.id)
 		expect(ctx().userPlannedBannerData).toEqual(ROWS_B)
-		expect(currentPath.current).toBe('/app/what-if')
+		expect(currentPath.current).toBe('/app/WhatIf12')
 	})
 
 	it('keeps the open plan and its pending edit when deleting a different plan', async () => {

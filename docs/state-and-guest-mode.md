@@ -59,7 +59,10 @@ for why it is never "whichever plan is active".
 
 - Save state is surfaced through Sonner toasts.
 - An `onbeforeunload` warning fires if a save is still pending.
-- **Guests never arm the timer** — their plan is in-memory only.
+- **Guests never arm the timer.** Their plan is not saved to the API. A tab-scoped snapshot
+  is kept temporarily so opening a public shared plan can be reversed even if the provider
+  remounts; it is restored only for a shared-plan visit. A fresh `/app` load clears that
+  backup, so an ordinary refresh still starts with a new guest plan.
 - **A row's note commits on blur, not per keystroke.** `BannerNoteEditor`
   (`components/carat-calculator/BannerNote.tsx`) keeps the text in local state while the
   person types, because every change to `userPlannedBannerData` re-arms this timer and the

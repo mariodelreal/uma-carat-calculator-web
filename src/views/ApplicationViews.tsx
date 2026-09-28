@@ -8,6 +8,7 @@ import { Footer } from "../components/footer/Footer.tsx"
 import { NotFound } from "../components/NotFound"
 import { OguriSpinner } from "../components/OguriSpinner"
 import { AppRouteMeta } from "./AppRouteMeta"
+import { APP_STATIC_ROUTE_PATHS } from "../constants/appRoutes"
 
 /* The page area while the initial fetch is still out. Sized to roughly fill the
    space the calculator will occupy, so the footer doesn't ride up under the
@@ -109,8 +110,8 @@ export const ApplicationViews = () => {
 			>
 				<Route index element={<CaratCalculator />} />
 				<Route path=":public_id" element={<CaratCalculator />} />
-				<Route path="timeline" element={<Timeline />}/>
-				<Route path="selectors" element={<Selectors />}/>
+				<Route path={APP_STATIC_ROUTE_PATHS.timeline} element={<Timeline />}/>
+				<Route path={APP_STATIC_ROUTE_PATHS.selectors} element={<Selectors />}/>
 			</Route>
 			{/* Unmatched path under /app. A SIBLING of the layout route, not a child:
 			    NotFound brings its own Navbar and Footer, so nesting it would render a

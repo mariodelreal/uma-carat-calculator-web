@@ -3,6 +3,7 @@ import { matchPath, useLocation, useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { CalculatorContext } from "./CalculatorContext"
 import { clearAuthToken, getAuthToken } from "./authToken"
+import { APP_STATIC_ROUTE_PATHS } from "../constants/appRoutes"
 import type {
 	CalculatorData,
 	UserStats,
@@ -55,6 +56,8 @@ import { useAutoSave } from "../hooks/useAutoSave"
 interface CalculatorProviderProps {
 	children: React.ReactNode
 }
+
+const PUBLIC_PLAN_ID_PATTERN = /^[A-Za-z0-9]{8}$/
 
 export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	const location = useLocation()
@@ -410,6 +413,13 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	}, [startTimer, userStatsData, userPlannedBannerData, userPlannedPurchaseData,
 		userStepUpSelectionData, activePlanId, isReadOnly])
 
+	const lastOwnedPlanIdRef = useRef<number | null>(null)
+	useEffect(() => {
+		if (activePlanId !== null && plans.some((plan) => plan.id === activePlanId)) {
+			lastOwnedPlanIdRef.current = activePlanId
+		}
+	}, [activePlanId, plans])
+
 	// ── Plans ────────────────────────────────────────────────────────────────
 	//
 	// Every action below follows one rule: SAVE WHAT IS ON SCREEN BEFORE
@@ -508,16 +518,22 @@ export const CalculatorProvider = ({ children }: CalculatorProviderProps) => {
 	const lastResolvedPlanPathRef = useRef<string | null>(null)
 	useEffect(() => {
 		if (isLoading || lastResolvedPlanPathRef.current === location.pathname) return
-		const publicId = matchPath(
+		const routeSegment = matchPath(
 			{ path: "/app/:public_id", end: true },
 			location.pathname
 		)?.params.public_id
+		if (routeSegment && Object.values(APP_STATIC_ROUTE_PATHS).some((path) => path === routeSegment)) {
+			lastResolvedPlanPathRef.current = location.pathname
+			return
+		}
+		const publicId = routeSegment && PUBLIC_PLAN_ID_PATTERN.test(routeSegment)
+			? routeSegment
+			: undefined
 		if (!publicId) {
 			lastResolvedPlanPathRef.current = location.pathname
-			if (isReadOnly) {
-				const ownedPlan = plans.find((plan) => plan.is_active) ?? plans[0]
-				if (ownedPlan) void switchPlan(ownedPlan.id)
-			}
+			const rememberedPlan = plans.find((plan) => plan.id === lastOwnedPlanIdRef.current)
+			const returnPlan = rememberedPlan ?? plans[0]
+			if (!routeSegment && getAuthToken() && returnPlan) void switchPlan(returnPlan.id)
 			return
 		}
 		lastResolvedPlanPathRef.current = location.pathname
